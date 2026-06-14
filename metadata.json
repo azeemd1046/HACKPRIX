@@ -1,0 +1,6 @@
+{
+  "name": "SkillStacker",
+  "description": "AI-powered career and skill development platform. Discover career paths, build valuable skills, identify skill gaps, and follow personalized learning roadmaps.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
