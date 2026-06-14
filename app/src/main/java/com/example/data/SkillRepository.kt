@@ -89,6 +89,13 @@ class SkillRepository(context: Context) {
     // DATABASE ACTIONS
     // ------------------------------------------------------------------------
 
+    // Use shared preferences to cache dynamic content locally
+    private val prefs = context.getSharedPreferences("skillstacker_prefs", Context.MODE_PRIVATE)
+
+    // ------------------------------------------------------------------------
+    // DATABASE ACTIONS
+    // ------------------------------------------------------------------------
+
     suspend fun saveProfile(
         email: String,
         fullName: String,
@@ -111,10 +118,17 @@ class SkillRepository(context: Context) {
         )
         appDao.insertProfile(entity)
 
-        // 2. Generate and populate custom beautiful local pre-made roadmap for the career goal!
+        // 2. Clear old cached raw data to ensure reload of fresh dynamic tracks
+        prefs.edit()
+            .remove("cached_roadmap_json")
+            .remove("cached_gap_analysis_json")
+            .remove("cached_daily_coach_json")
+            .apply()
+
+        // 3. Generate and populate custom beautiful local pre-made roadmap
         createPredefinedRoadmap(careerGoal)
 
-        // 3. Attempt Supabase sync
+        // 4. Attempt Supabase sync
         try {
             if (NetworkClients.hasSupabaseConfig()) {
                 NetworkClients.supabaseUpsertProfile(
@@ -129,6 +143,11 @@ class SkillRepository(context: Context) {
     suspend fun clearSessionAndProfile() {
         appDao.clearProfiles()
         appDao.clearRoadmapTasks()
+        prefs.edit()
+            .remove("cached_roadmap_json")
+            .remove("cached_gap_analysis_json")
+            .remove("cached_daily_coach_json")
+            .apply()
     }
 
     suspend fun updateTaskStatus(id: Int, isCompleted: Boolean) {
@@ -183,7 +202,6 @@ class SkillRepository(context: Context) {
                 RoadmapTaskEntity(phase = 2, phaseTitle = "Phase 2: State & Storage", title = "REST Networking & Retrofit Client", description = "Connect app to external endpoints securely, parse JSON configurations, and handle network states."),
                 RoadmapTaskEntity(phase = 3, phaseTitle = "Phase 3: Production Polishing", title = "Custom Graphics, Icons & Play Release", description = "Add custom Canvas drawings, design adaptive vector launcher symbols, optimize Gradle variables, and upload AAB bundle.")
             )
-            // Fallback for creative, business, other digital goals
             else -> listOf(
                 RoadmapTaskEntity(phase = 1, phaseTitle = "Phase 1: Getting Started", title = "Core Terminology & Essential Tools", description = "Familiarize yourself with the fundamental workflows and tools used by top industry professionals."),
                 RoadmapTaskEntity(phase = 1, phaseTitle = "Phase 1: Getting Started", title = "Case Study Analysis", description = "Examine industry-leading examples of work and reverse-engineer their success patterns."),
@@ -195,64 +213,148 @@ class SkillRepository(context: Context) {
     }
 
     // ------------------------------------------------------------------------
-    // AI INTERNALS: GEMINI CONTEXT BUILDERS
+    // SUPABASE HYBRID DATA SYNCHRONIZATION (Load Existing Data)
+    // ------------------------------------------------------------------------
+
+    suspend fun fetchAndSyncSupabaseData(email: String, token: String?) {
+        try {
+            val roadmapJson = NetworkClients.supabaseFetchRoadmap(email, token)
+            if (!roadmapJson.isNullOrEmpty()) {
+                prefs.edit().putString("cached_roadmap_json", roadmapJson).apply()
+                val cleaned = roadmapJson.trim()
+                    .removePrefix("```json")
+                    .removePrefix("```")
+                    .removeSuffix("```")
+                    .trim()
+                val jsonObject = JSONObject(cleaned)
+                val phasesArr = jsonObject.optJSONArray("phases")
+                if (phasesArr != null) {
+                    val generatedTasks = ArrayList<RoadmapTaskEntity>()
+                    for (i in 0 until phasesArr.length()) {
+                        val phaseObj = phasesArr.getJSONObject(i)
+                        val phaseNum = phaseObj.optInt("phase", i + 1)
+                        val phaseTitle = phaseObj.optString("phaseTitle", "Phase $phaseNum")
+                        val tasksArr = phaseObj.optJSONArray("tasks")
+                        if (tasksArr != null) {
+                            for (j in 0 until tasksArr.length()) {
+                                val taskObj = tasksArr.getJSONObject(j)
+                                generatedTasks.add(
+                                    RoadmapTaskEntity(
+                                        phase = phaseNum,
+                                        phaseTitle = phaseTitle,
+                                        title = taskObj.optString("title", ""),
+                                        description = taskObj.optString("description", ""),
+                                        isAiGenerated = true
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    if (generatedTasks.isNotEmpty()) {
+                        appDao.clearRoadmapTasks()
+                        appDao.insertRoadmapTasks(generatedTasks)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        try {
+            val analysisJson = NetworkClients.supabaseFetchSkillAnalysis(email, token)
+            if (!analysisJson.isNullOrEmpty()) {
+                prefs.edit().putString("cached_gap_analysis_json", analysisJson).apply()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // FEATURE 1: AI ROADMAP GENERATOR
     // ------------------------------------------------------------------------
 
     suspend fun generateAiRoadmap(
+        email: String,
         careerGoal: String,
         currentLevel: String,
-        interests: String
+        interests: String,
+        token: String?
     ): Boolean {
         if (!NetworkClients.hasGeminiConfig()) {
-            return false // Let caller know we should fallback to simulation
+            return false 
         }
 
         val prompt = """
             You are SkillStacker AI Career Consultant.
-            Generate a personalized professional learning roadmap in strict JSON format.
-            The user wants to become a: '$careerGoal'.
+            Generate a personalized professional learning roadmap in strict JSON format for a student targeting: '$careerGoal'.
             Their current level is: '$currentLevel'.
             Their stated interests are: '$interests'.
             
-            Return a JSON array containing up to 4 elements representing educational milestones/tasks.
-            Each element MUST have exactly these fields:
-            - "phase": number (1, 2, or 3)
-            - "phaseTitle": string like "Phase X: Title"
-            - "title": string (the focused skill name or framework)
-            - "description": string (one sentence summarizing what to study)
+            Return a direct JSON object (DO NOT use backticks, markdown, or any explanation text) with these properties:
+            - "learningTimeline": string indicating complete time duration (e.g., "16 Weeks")
+            - "phases": array of 3 objects, each representing a learning milestone/phase with properties:
+              - "phase": integer (1, 2, or 3)
+              - "phaseTitle": string showing phase overview (e.g., "Phase 1: Foundations")
+              - "skillsToLearn": array of 3 core skill strings
+              - "recommendedResources": array of 2 free high-quality online course links/names
+              - "beginnerProjects": array of 2 project ideas
+              - "weeklyMilestones": array of 2 weekly milestones
+              - "certifications": array of 2 free/paid key industry certifications
+              - "tasks": array of 2 checkable milestone tasks, each containing action properties:
+                - "title": string (the focus skill name, tools, or libraries)
+                - "description": string (one sentence summarizing what to study or set up)
 
-            Do NOT wrap the JSON in Markdown backticks or any other text. Return ONLY the JSON array.
+            Return ONLY the valid raw JSON object. Do not wrap the output in ```json or ``` blocks.
         """.trimIndent()
 
         return try {
             val rawResponse = NetworkClients.generateGeminiResponse(prompt)
             if (rawResponse.isNullOrEmpty()) return false
 
-            // Clean output if model included backticks
             val cleaned = rawResponse.trim()
                 .removePrefix("```json")
                 .removePrefix("```")
                 .removeSuffix("```")
                 .trim()
 
-            val jsonArray = JSONArray(cleaned)
+            val jsonObject = JSONObject(cleaned)
+            val phasesArr = jsonObject.getJSONArray("phases")
             val generatedTasks = ArrayList<RoadmapTaskEntity>()
-            for (i in 0 until jsonArray.length()) {
-                val obj = jsonArray.getJSONObject(i)
-                generatedTasks.add(
-                    RoadmapTaskEntity(
-                        phase = obj.optInt("phase", 1),
-                        phaseTitle = obj.optString("phaseTitle", "Phase 1: Generated"),
-                        title = obj.optString("title", ""),
-                        description = obj.optString("description", ""),
-                        isAiGenerated = true
+
+            for (i in 0 until phasesArr.length()) {
+                val phaseObj = phasesArr.getJSONObject(i)
+                val phaseNum = phaseObj.optInt("phase", i + 1)
+                val phaseTitle = phaseObj.optString("phaseTitle", "Phase $phaseNum")
+                val tasksArr = phaseObj.getJSONArray("tasks")
+                for (j in 0 until tasksArr.length()) {
+                    val taskObj = tasksArr.getJSONObject(j)
+                    generatedTasks.add(
+                        RoadmapTaskEntity(
+                            phase = phaseNum,
+                            phaseTitle = phaseTitle,
+                            title = taskObj.optString("title", ""),
+                            description = taskObj.optString("description", ""),
+                            isAiGenerated = true
+                        )
                     )
-                )
+                }
             }
 
             if (generatedTasks.isNotEmpty()) {
+                // Save locally to database
                 appDao.clearRoadmapTasks()
                 appDao.insertRoadmapTasks(generatedTasks)
+
+                // Cache raw response locally
+                prefs.edit().putString("cached_roadmap_json", cleaned).apply()
+
+                // Save to Supabase
+                try {
+                    NetworkClients.supabaseUpsertRoadmap(email, cleaned, token)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
                 return true
             }
             false
@@ -262,12 +364,21 @@ class SkillRepository(context: Context) {
         }
     }
 
+    fun getCachedRoadmapJson(): String? {
+        return prefs.getString("cached_roadmap_json", null)
+    }
+
+    // ------------------------------------------------------------------------
+    // FEATURE 2: AI SKILL GAP ANALYZER
+    // ------------------------------------------------------------------------
+
     suspend fun analyzeSkillGap(
+        email: String,
         careerGoal: String,
-        currentSkills: String
+        currentSkills: String,
+        token: String?
     ): SkillGapReport {
         if (!NetworkClients.hasGeminiConfig()) {
-            // Local high-fidelity heuristic gap analyzer
             return getLocalSkillGapReport(careerGoal, currentSkills)
         }
 
@@ -276,10 +387,16 @@ class SkillRepository(context: Context) {
             Perform a professional skill gap analysis for a student targeting: '$careerGoal'.
             The skills they currently know or are interested in are: '$currentSkills'.
 
-            Return a direct JSON object (DO NOT use backticks or other explanation) with these properties:
+            Return a direct JSON object (DO NOT use backticks, markdown, or any explanation) with these properties:
             - "readinessScore": integer between 10 and 100 representing market readiness.
             - "missingSkills": array of 3 strings outlining high-demand missing skills.
             - "recommendations": array of 3 strings with tactical actions.
+            - "recommendedSkills": array of 3 hot skills they should pick up.
+            - "recommendedProjects": array of 3 specific portfolio-grade project ideas.
+            - "estimatedTime": string (e.g. "6 Months" or "1.5 Years") of estimated study time to become job-ready.
+            - "readinessSummary": string outlining current industrial demand and requirements.
+
+            Return ONLY the valid raw JSON object. Do not wrap in ```json or ``` brackets.
         """.trimIndent()
 
         return try {
@@ -305,10 +422,44 @@ class SkillRepository(context: Context) {
                 recs.add(recsArr.getString(i))
             }
 
+            val skills = ArrayList<String>()
+            val skillsArr = json.optJSONArray("recommendedSkills")
+            if (skillsArr != null) {
+                for (i in 0 until skillsArr.length()) {
+                    skills.add(skillsArr.getString(i))
+                }
+            } else {
+                skills.addAll(listOf("Communication", "Version Control", "Problem Solving"))
+            }
+
+            val projects = ArrayList<String>()
+            val projectsArr = json.optJSONArray("recommendedProjects")
+            if (projectsArr != null) {
+                for (i in 0 until projectsArr.length()) {
+                    projects.add(projectsArr.getString(i))
+                }
+            } else {
+                projects.addAll(listOf("Automated Unit Test Automation Framework", "Real-time Dashboard Analytics Center", "Cloud VPS Web Server Deployment"))
+            }
+
+            // Cache response on SharedPreferences
+            prefs.edit().putString("cached_gap_analysis_json", cleaned).apply()
+
+            // Save to Supabase DB table
+            try {
+                NetworkClients.supabaseUpsertSkillAnalysis(email, currentSkills, careerGoal, cleaned, token)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
             SkillGapReport(
                 readinessScore = json.optInt("readinessScore", 45),
                 missingSkills = missing,
                 recommendations = recs,
+                recommendedSkills = skills,
+                recommendedProjects = projects,
+                estimatedTime = json.optString("estimatedTime", "6 Months"),
+                readinessSummary = json.optString("readinessSummary", "Your background aligns with foundational entry-level benchmarks."),
                 isRealAi = true
             )
         } catch (e: Exception) {
@@ -317,8 +468,50 @@ class SkillRepository(context: Context) {
         }
     }
 
+    fun getCachedSkillGapReport(): SkillGapReport? {
+        val cached = prefs.getString("cached_gap_analysis_json", null) ?: return null
+        return try {
+            val json = JSONObject(cached)
+            val missing = ArrayList<String>()
+            val missingArr = json.getJSONArray("missingSkills")
+            for (i in 0 until missingArr.length()) missing.add(missingArr.getString(i))
+
+            val recs = ArrayList<String>()
+            val recsArr = json.getJSONArray("recommendations")
+            for (i in 0 until recsArr.length()) recs.add(recsArr.getString(i))
+
+            val skills = ArrayList<String>()
+            val skillsArr = json.optJSONArray("recommendedSkills")
+            if (skillsArr != null) {
+                for (i in 0 until skillsArr.length()) skills.add(skillsArr.getString(i))
+            } else {
+                skills.addAll(listOf("Communication", "Version Control", "Problem Solving"))
+            }
+
+            val projects = ArrayList<String>()
+            val projectsArr = json.optJSONArray("recommendedProjects")
+            if (projectsArr != null) {
+                for (i in 0 until projectsArr.length()) projects.add(projectsArr.getString(i))
+            } else {
+                projects.addAll(listOf("Automated Unit Test Automation Framework", "Real-time Dashboard Analytics Center", "Cloud VPS Web Server Deployment"))
+            }
+
+            SkillGapReport(
+                readinessScore = json.optInt("readinessScore", 45),
+                missingSkills = missing,
+                recommendations = recs,
+                recommendedSkills = skills,
+                recommendedProjects = projects,
+                estimatedTime = json.optString("estimatedTime", "6 Months"),
+                readinessSummary = json.optString("readinessSummary", "Loaded from local cloud-synchronized analysis records."),
+                isRealAi = true
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun getLocalSkillGapReport(careerGoal: String, currentSkills: String): SkillGapReport {
-        // High-fidelity prewired gap intelligence model
         val parsedInterests = currentSkills.lowercase()
         val hasProgramming = parsedInterests.contains("web") || parsedInterests.contains("science") || parsedInterests.contains("developer")
         val score = if (hasProgramming) 55 else 35
@@ -354,15 +547,172 @@ class SkillRepository(context: Context) {
             readinessScore = score,
             missingSkills = missing,
             recommendations = recs,
+            recommendedSkills = listOf("Git & GitHub collaboration", "M3 Design Axioms", "Logical problem solving"),
+            recommendedProjects = listOf("Local Sandbox SQLite storage explorer", "Custom UI style kit project"),
+            estimatedTime = "6 Months",
+            readinessSummary = "Simulated benchmark based on selected professional-level parameters.",
             isRealAi = false
         )
     }
+
+    // ------------------------------------------------------------------------
+    // FEATURE 3: AI DAILY COACH
+    // ------------------------------------------------------------------------
+
+    suspend fun generateDailyRecommendation(
+        careerGoal: String,
+        progress: String,
+        currentSkills: String
+    ): DailyRecommendation? {
+        if (!NetworkClients.hasGeminiConfig()) return null
+
+        val prompt = """
+            You are SkillStacker Daily Learning Coach.
+            Analyze this student context to generate dynamic today's learning recommendations:
+            - Career Goal: '$careerGoal'
+            - Learning Progress: '$progress'
+            - Declared Skills/Interests: '$currentSkills'
+
+            Return a direct JSON object (DO NOT use backticks, markdown, or any explanation) with these properties:
+            - "todaysFocus": string outlining a very concrete, single concept to read or write today.
+            - "reason": string explaining exactly why this topic is the absolute logical next step in their career.
+            - "estimatedDuration": string (e.g., "45 mins" or "1.5 hours")
+            - "recommendedResource": string detailing a solid, high-quality free online tutorial resource name.
+
+            Return ONLY raw JSON. Do not include ```json or other formatting.
+        """.trimIndent()
+
+        return try {
+            val rawResponse = NetworkClients.generateGeminiResponse(prompt) ?: return null
+            val cleaned = rawResponse.trim()
+                .removePrefix("```json")
+                .removePrefix("```")
+                .removeSuffix("```")
+                .trim()
+
+            val json = JSONObject(cleaned)
+            val rec = DailyRecommendation(
+                todaysFocus = json.getString("todaysFocus"),
+                reason = json.getString("reason"),
+                estimatedDuration = json.getString("estimatedDuration"),
+                recommendedResource = json.getString("recommendedResource")
+            )
+
+            // Cache
+            prefs.edit().putString("cached_daily_coach_json", cleaned).apply()
+            rec
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    fun getCachedDailyRecommendation(): DailyRecommendation? {
+        val cached = prefs.getString("cached_daily_coach_json", null) ?: return null
+        return try {
+            val json = JSONObject(cached)
+            DailyRecommendation(
+                todaysFocus = json.getString("todaysFocus"),
+                reason = json.getString("reason"),
+                estimatedDuration = json.getString("estimatedDuration"),
+                recommendedResource = json.getString("recommendedResource")
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // FEATURE 4: AI CAREER MATCH ("I don't know yet" helper)
+    // ------------------------------------------------------------------------
+
+    suspend fun generateCareerMatches(
+        branch: String,
+        year: String,
+        interests: String
+    ): List<CareerMatch>? {
+        if (!NetworkClients.hasGeminiConfig()) return null
+
+        val prompt = """
+            You are SkillStacker AI Career Consultant.
+            Perform analytical mapping to suggest top 5 optimal career tracks based on:
+            - College branch: '$branch'
+            - Academic class: '$year year'
+            - Extracurricular skill interests: '$interests'
+
+            Return a direct JSON array (DO NOT use markdown, backticks, or any conversational responses) with exactly 5 objects.
+            Each object MUST possess these exact properties:
+            - "career": string name of career (e.g. "Full Stack Developer", "Cybersecurity Engineer")
+            - "matchPercentage": integer representing probability percentage (e.g. 92)
+            - "reasoning": string summarizing why it aligns
+            - "startingSkills": array of 3 initial skill strings to learn
+            - "roadmapSummary": string defining summary of study path
+
+            Return ONLY the valid raw JSON array. Do not use markdown wrappers.
+        """.trimIndent()
+
+        return try {
+            val rawResponse = NetworkClients.generateGeminiResponse(prompt) ?: return null
+            val cleaned = rawResponse.trim()
+                .removePrefix("```json")
+                .removePrefix("```")
+                .removeSuffix("```")
+                .trim()
+
+            val array = JSONArray(cleaned)
+            val matches = ArrayList<CareerMatch>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val skills = ArrayList<String>()
+                val skillsArr = obj.getJSONArray("startingSkills")
+                for (j in 0 until skillsArr.length()) {
+                    skills.add(skillsArr.getString(j))
+                }
+
+                matches.add(
+                    CareerMatch(
+                        career = obj.getString("career"),
+                        matchPercentage = obj.optInt("matchPercentage", 80),
+                        reasoning = obj.getString("reasoning"),
+                        startingSkills = skills,
+                        roadmapSummary = obj.getString("roadmapSummary")
+                    )
+                )
+            }
+            matches
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
 }
 
-// Helper models for AI analysis
+// ------------------------------------------------------------------------
+// DATA MODELS REPRESENTING SPECIALIZED AI STRUCTURES
+// ------------------------------------------------------------------------
+
 data class SkillGapReport(
     val readinessScore: Int,
     val missingSkills: List<String>,
     val recommendations: List<String>,
+    val recommendedSkills: List<String> = emptyList(),
+    val recommendedProjects: List<String> = emptyList(),
+    val estimatedTime: String = "6 Months",
+    val readinessSummary: String = "Not synchronized with backend AI benchmarks.",
     val isRealAi: Boolean = false
+)
+
+data class DailyRecommendation(
+    val todaysFocus: String,
+    val reason: String,
+    val estimatedDuration: String,
+    val recommendedResource: String
+)
+
+data class CareerMatch(
+    val career: String,
+    val matchPercentage: Int,
+    val reasoning: String,
+    val startingSkills: List<String>,
+    val roadmapSummary: String
 )

@@ -36,6 +36,9 @@ class SkillStackerViewModel(application: Application) : AndroidViewModel(applica
     private val _currentScreen = MutableStateFlow<AppScreen>(AppScreen.Splash)
     val currentScreen: StateFlow<AppScreen> = _currentScreen.asStateFlow()
 
+    private val _activeOAuthUrl = MutableStateFlow<String?>(null)
+    val activeOAuthUrl: StateFlow<String?> = _activeOAuthUrl.asStateFlow()
+
     private val _currentTab = MutableStateFlow(DashboardTab.HOME)
     val currentTab: StateFlow<DashboardTab> = _currentTab.asStateFlow()
 
@@ -91,6 +94,20 @@ class SkillStackerViewModel(application: Application) : AndroidViewModel(applica
     private val _isGeneratingRoadmap = MutableStateFlow(false)
     val isGeneratingRoadmap: StateFlow<Boolean> = _isGeneratingRoadmap.asStateFlow()
 
+    // Daily Coach state holders
+    private val _dailyRecommendation = MutableStateFlow<DailyRecommendation?>(null)
+    val dailyRecommendation: StateFlow<DailyRecommendation?> = _dailyRecommendation.asStateFlow()
+
+    private val _isGeneratingDailyCoach = MutableStateFlow(false)
+    val isGeneratingDailyCoach: StateFlow<Boolean> = _isGeneratingDailyCoach.asStateFlow()
+
+    // Career Match state holders
+    private val _careerMatchesList = MutableStateFlow<List<CareerMatch>?>(null)
+    val careerMatchesList: StateFlow<List<CareerMatch>?> = _careerMatchesList.asStateFlow()
+
+    private val _isGeneratingCareerMatches = MutableStateFlow(false)
+    val isGeneratingCareerMatches: StateFlow<Boolean> = _isGeneratingCareerMatches.asStateFlow()
+
     init {
         checkSession()
     }
@@ -108,6 +125,16 @@ class SkillStackerViewModel(application: Application) : AndroidViewModel(applica
                 // Check if profile exists in db (Room flow handles latest profile updates)
                 if (hasCompletedOnboard) {
                     _currentScreen.value = AppScreen.Dashboard
+                    _isLoading.value = true
+                    try {
+                        val token = prefs.getString("auth_token", null)
+                        repository.fetchAndSyncSupabaseData(cachedUser, token)
+                        refreshFromCache()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    } finally {
+                        _isLoading.value = false
+                    }
                     // Perform initial skill gap check
                     triggerDefaultSkillGapAnalysis()
                 } else {
@@ -117,6 +144,17 @@ class SkillStackerViewModel(application: Application) : AndroidViewModel(applica
             }
         } else {
             _currentScreen.value = AppScreen.Splash
+        }
+    }
+
+    fun refreshFromCache() {
+        val cachedReport = repository.getCachedSkillGapReport()
+        if (cachedReport != null) {
+            _skillGapReport.value = cachedReport
+        }
+        val cachedDaily = repository.getCachedDailyRecommendation()
+        if (cachedDaily != null) {
+            _dailyRecommendation.value = cachedDaily
         }
     }
 
@@ -218,16 +256,50 @@ class SkillStackerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun handleGoogleSignIn() {
-        val demoEmail = "google_user@gmail.com"
+        if (!NetworkClients.hasSupabaseConfig()) {
+            _statusMessage.value = "Supabase is not configured. Please use the Secrets panel to add credentials."
+            return
+        }
+        viewModelScope.launch {
+            try {
+                _isLoading.value = true
+                val authUrl = "${com.example.BuildConfig.SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=skillstacker://login"
+                _activeOAuthUrl.value = authUrl
+                _statusMessage.value = "Opening Google Sign-In secure portal..."
+            } catch (e: Exception) {
+                _statusMessage.value = "Failed to launch Google Sign-In: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun dismissOAuthFlow() {
+        _activeOAuthUrl.value = null
+    }
+
+    fun handleSupabaseOauthCallback(token: String) {
         viewModelScope.launch {
             _isLoading.value = true
+            _statusMessage.value = "Authenticating with Supabase..."
             try {
-                prefs.edit().putString("user_email", demoEmail).apply()
-                _currentUserEmail.value = demoEmail
-                _statusMessage.value = "Logged in with Google successfully."
-                checkSession()
+                val user = NetworkClients.fetchSupabaseUser(token)
+                if (user != null) {
+                    val (email, fullName) = user
+                    prefs.edit()
+                        .putString("user_email", email)
+                        .putString("auth_token", token)
+                        .apply()
+                        
+                    _currentUserEmail.value = email
+                    onboardFullName.value = fullName
+                    _statusMessage.value = "Google Authentication success!"
+                    checkSession()
+                } else {
+                    _statusMessage.value = "Failed to fetch user session from Supabase."
+                }
             } catch (e: Exception) {
-                _statusMessage.value = "Google OAuth Error: ${e.localizedMessage}"
+                _statusMessage.value = "OAuth Callback Error: ${e.localizedMessage}"
             } finally {
                 _isLoading.value = false
             }
@@ -353,14 +425,19 @@ class SkillStackerViewModel(application: Application) : AndroidViewModel(applica
 
     fun generateAiRoadmap() {
         val profile = _latestProfile.value ?: return
+        val email = _currentUserEmail.value ?: "offline_user@gmail.com"
+        val token = prefs.getString("auth_token", null)
+
         viewModelScope.launch {
             _isGeneratingRoadmap.value = true
             _statusMessage.value = "Consulting Gemini AI Career Advisor..."
             try {
                 val success = repository.generateAiRoadmap(
-                    profile.careerGoal,
-                    profile.currentLevel,
-                    profile.interests
+                    email = email,
+                    careerGoal = profile.careerGoal,
+                    currentLevel = profile.currentLevel,
+                    interests = profile.interests,
+                    token = token
                 )
                 if (success) {
                     _statusMessage.value = "Roadmap generated successfully!"
@@ -377,12 +454,17 @@ class SkillStackerViewModel(application: Application) : AndroidViewModel(applica
 
     fun analyzeSkillGap() {
         val profile = _latestProfile.value ?: return
+        val email = _currentUserEmail.value ?: "offline_user@gmail.com"
+        val token = prefs.getString("auth_token", null)
+
         viewModelScope.launch {
             _isAnalyzingGap.value = true
             try {
                 val report = repository.analyzeSkillGap(
-                    profile.careerGoal,
-                    profile.interests
+                    email = email,
+                    careerGoal = profile.careerGoal,
+                    currentSkills = profile.interests,
+                    token = token
                 )
                 _skillGapReport.value = report
                 if (report.isRealAi) {
@@ -400,12 +482,17 @@ class SkillStackerViewModel(application: Application) : AndroidViewModel(applica
 
     private fun triggerDefaultSkillGapAnalysis() {
         val profile = _latestProfile.value
+        val email = _currentUserEmail.value ?: "offline_user@gmail.com"
+        val token = prefs.getString("auth_token", null)
+
         viewModelScope.launch {
             _isAnalyzingGap.value = true
             try {
                 val report = repository.analyzeSkillGap(
-                    profile?.careerGoal ?: "Full Stack Developer",
-                    profile?.interests ?: "Web Development"
+                    email = email,
+                    careerGoal = profile?.careerGoal ?: "Full Stack Developer",
+                    currentSkills = profile?.interests ?: "Web Development",
+                    token = token
                 )
                 _skillGapReport.value = report
             } catch (e: Exception) {
@@ -416,7 +503,90 @@ class SkillStackerViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    fun generateDailyRecommendation() {
+        val profile = _latestProfile.value ?: return
+        viewModelScope.launch {
+            _isGeneratingDailyCoach.value = true
+            _statusMessage.value = "Consulting Gemini Study Coach..."
+            try {
+                val completed = roadmapTasks.value.count { it.isCompleted }
+                val total = roadmapTasks.value.size
+                val progressStr = "$completed of $total tasks completed"
+                val rec = repository.generateDailyRecommendation(
+                    careerGoal = profile.careerGoal,
+                    progress = progressStr,
+                    currentSkills = profile.interests
+                )
+                if (rec != null) {
+                    _dailyRecommendation.value = rec
+                    _statusMessage.value = "Coach advice generated for today!"
+                } else {
+                    _statusMessage.value = "Gemini key not configured. Daily recommendation is empty."
+                }
+            } catch (e: Exception) {
+                _statusMessage.value = "Coach consult failed: ${e.message}"
+            } finally {
+                _isGeneratingDailyCoach.value = false
+            }
+        }
+    }
+
+    fun generateCareerMatches() {
+        val b = _latestProfile.value?.branch ?: onboardBranch.value
+        val y = _latestProfile.value?.year ?: onboardYear.value
+        val ints = _latestProfile.value?.interests ?: onboardInterests.value.joinToString(", ")
+
+        viewModelScope.launch {
+            _isGeneratingCareerMatches.value = true
+            _statusMessage.value = "Evaluating university pathways on Gemini..."
+            try {
+                val list = repository.generateCareerMatches(b, y, ints)
+                if (list != null) {
+                    _careerMatchesList.value = list
+                    _statusMessage.value = "Mapped career fits successfully!"
+                } else {
+                    _statusMessage.value = "Gemini key required to run Career Matcher."
+                }
+            } catch (e: Exception) {
+                _statusMessage.value = "Matching failed: ${e.message}"
+            } finally {
+                _isGeneratingCareerMatches.value = false
+            }
+        }
+    }
+
+    fun adoptCareerGoal(career: String) {
+        viewModelScope.launch {
+            val email = _currentUserEmail.value ?: "offline_user@gmail.com"
+            _statusMessage.value = "Adopting career goal: $career"
+            val profile = _latestProfile.value
+            val fullName = profile?.fullName ?: onboardFullName.value.ifEmpty { "Skill Scholar" }
+            val branch = profile?.branch ?: onboardBranch.value.ifEmpty { "CSE" }
+            val year = profile?.year ?: onboardYear.value.ifEmpty { "1st" }
+            val currentLevel = profile?.currentLevel ?: onboardCurrentLevel.value.ifEmpty { "Beginner" }
+            val interests = profile?.interests ?: onboardInterests.value.joinToString(", ").ifEmpty { "Web Development" }
+            val token = prefs.getString("auth_token", null)
+
+            onboardCareerGoal.value = career
+            _isLoading.value = true
+            try {
+                repository.saveProfile(
+                    email, fullName, branch, year, career, currentLevel, interests, token
+                )
+                _statusMessage.value = "New Career Goal active. Created fresh milestones!"
+                triggerDefaultSkillGapAnalysis()
+            } catch (e: Exception) {
+                _statusMessage.value = "Fail setting goal: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
     // Exposed helpers
     val skillLibrary: List<Skill> = repository.skillLibraryList
     val curatedResources: List<ResourceItem> = repository.curatedResources
+
+    fun getCachedRoadmapJson(): String? = repository.getCachedRoadmapJson()
+    fun getCachedSkillGapReport(): SkillGapReport? = repository.getCachedSkillGapReport()
 }

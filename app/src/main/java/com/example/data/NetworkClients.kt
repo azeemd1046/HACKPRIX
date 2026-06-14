@@ -105,6 +105,37 @@ object NetworkClients {
         }
     }
 
+    // Fetches user profile/email/metadata from Supabase auth with JWT token
+    suspend fun fetchSupabaseUser(token: String): Pair<String, String>? = withContext(Dispatchers.IO) {
+        if (!hasSupabaseConfig()) return@withContext null
+        try {
+            val url = "${BuildConfig.SUPABASE_URL}/auth/v1/user"
+            val request = Request.Builder()
+                .url(url)
+                .get()
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer $token")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val bodyStr = response.body?.string() ?: ""
+                    Log.e(TAG, "Fetch user failed: $bodyStr")
+                    return@withContext null
+                }
+                val bodyStr = response.body?.string() ?: return@withContext null
+                val json = JSONObject(bodyStr)
+                val email = json.getString("email")
+                val userMetadata = json.optJSONObject("user_metadata")
+                val fullName = userMetadata?.optString("full_name") ?: userMetadata?.optString("name") ?: "Skill Scholar"
+                return@withContext Pair(email, fullName)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Fetch user exception", e)
+            return@withContext null
+        }
+    }
+
     // Inserts/Updates a profile in Supabase db
     suspend fun supabaseUpsertProfile(
         email: String,
@@ -157,6 +188,144 @@ object NetworkClients {
             Log.e(TAG, "Profile Save exception", e)
             return@withContext false
         }
+    }
+
+    // Inserts/Updates a roadmap JSON in Supabase db
+    suspend fun supabaseUpsertRoadmap(
+        email: String,
+        roadmapJson: String,
+        token: String?
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!hasSupabaseConfig()) return@withContext false
+        try {
+            val url = "${BuildConfig.SUPABASE_URL}/rest/v1/roadmaps"
+            val json = JSONObject().apply {
+                put("id", email)
+                put("user_id", email)
+                put("email", email)
+                put("roadmap_json", roadmapJson)
+                put("created_at", System.currentTimeMillis())
+            }
+
+            val arrayBody = JSONArray().put(json).toString()
+            val reqBuilder = Request.Builder()
+                .url(url)
+                .post(arrayBody.toRequestBody(JSON_MEDIA_TYPE))
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "resolution=merge-duplicates")
+
+            if (!token.isNullOrEmpty()) {
+                reqBuilder.addHeader("Authorization", "Bearer $token")
+            }
+
+            client.newCall(reqBuilder.build()).execute().use { response ->
+                return@withContext response.isSuccessful
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Roadmap Save failed", e)
+            return@withContext false
+        }
+    }
+
+    // Fetches roadmap JSON from Supabase db
+    suspend fun supabaseFetchRoadmap(email: String, token: String?): String? = withContext(Dispatchers.IO) {
+        if (!hasSupabaseConfig()) return@withContext null
+        try {
+            val url = "${BuildConfig.SUPABASE_URL}/rest/v1/roadmaps?or=(user_id.eq.$email,email.eq.$email,id.eq.$email)&select=*"
+            val reqBuilder = Request.Builder()
+                .url(url)
+                .get()
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+
+            if (!token.isNullOrEmpty()) {
+                reqBuilder.addHeader("Authorization", "Bearer $token")
+            }
+
+            client.newCall(reqBuilder.build()).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val bodyStr = response.body?.string() ?: return@withContext null
+                val array = JSONArray(bodyStr)
+                if (array.length() > 0) {
+                    val obj = array.getJSONObject(0)
+                    return@withContext obj.optString("roadmap_json", null)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Roadmap Fetch failed", e)
+        }
+        return@withContext null
+    }
+
+    // Inserts/Updates a skill analysis in Supabase db
+    suspend fun supabaseUpsertSkillAnalysis(
+        email: String,
+        currentSkills: String,
+        targetCareer: String,
+        analysisJson: String,
+        token: String?
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!hasSupabaseConfig()) return@withContext false
+        try {
+            val url = "${BuildConfig.SUPABASE_URL}/rest/v1/skill_analysis"
+            val json = JSONObject().apply {
+                put("id", email)
+                put("user_id", email)
+                put("email", email)
+                put("current_skills", currentSkills)
+                put("target_career", targetCareer)
+                put("analysis_json", analysisJson)
+                put("created_at", System.currentTimeMillis())
+            }
+
+            val arrayBody = JSONArray().put(json).toString()
+            val reqBuilder = Request.Builder()
+                .url(url)
+                .post(arrayBody.toRequestBody(JSON_MEDIA_TYPE))
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "resolution=merge-duplicates")
+
+            if (!token.isNullOrEmpty()) {
+                reqBuilder.addHeader("Authorization", "Bearer $token")
+            }
+
+            client.newCall(reqBuilder.build()).execute().use { response ->
+                return@withContext response.isSuccessful
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Skill Analysis Save failed", e)
+            return@withContext false
+        }
+    }
+
+    // Fetches skill analysis JSON from Supabase db
+    suspend fun supabaseFetchSkillAnalysis(email: String, token: String?): String? = withContext(Dispatchers.IO) {
+        if (!hasSupabaseConfig()) return@withContext null
+        try {
+            val url = "${BuildConfig.SUPABASE_URL}/rest/v1/skill_analysis?or=(user_id.eq.$email,email.eq.$email,id.eq.$email)&select=*"
+            val reqBuilder = Request.Builder()
+                .url(url)
+                .get()
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+
+            if (!token.isNullOrEmpty()) {
+                reqBuilder.addHeader("Authorization", "Bearer $token")
+            }
+
+            client.newCall(reqBuilder.build()).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val bodyStr = response.body?.string() ?: return@withContext null
+                val array = JSONArray(bodyStr)
+                if (array.length() > 0) {
+                    val obj = array.getJSONObject(0)
+                    return@withContext obj.optString("analysis_json", null)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Skill Analysis Fetch failed", e)
+        }
+        return@withContext null
     }
 
     private fun parseError(bodyStr: String): String {
