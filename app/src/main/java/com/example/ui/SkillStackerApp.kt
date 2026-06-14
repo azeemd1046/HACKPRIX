@@ -2,6 +2,7 @@ package com.example.ui
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,6 +12,9 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.zIndex
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -1485,6 +1489,38 @@ fun MainDashboardWrapper(viewModel: SkillStackerViewModel) {
                 DashboardTab.RESOURCES -> ResourcesLayout(viewModel = viewModel)
                 DashboardTab.PROFILE -> ProfileLayout(viewModel = viewModel)
             }
+
+            // Top-right Floating Action Button for AI Career Coach
+            val isChatOpen by viewModel.isChatOpen.collectAsStateWithLifecycle()
+            
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(end = 16.dp, top = 16.dp)
+                    .zIndex(10f)
+            ) {
+                FloatingActionButton(
+                    onClick = { viewModel.toggleChat(true) },
+                    containerColor = SkillSecondary,
+                    contentColor = Color.White,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .testTag("open_ai_mentor_fab")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "AI Mentor",
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+
+            // AI Coach Career Mentor Chat Panel overlay
+            if (isChatOpen) {
+                AiMentorChatPanel(viewModel = viewModel)
+            }
         }
     }
 }
@@ -2116,6 +2152,8 @@ fun HomeLayout(viewModel: SkillStackerViewModel) {
     val tasks by viewModel.roadmapTasks.collectAsStateWithLifecycle()
     val isSupabaseActive by viewModel.isSupabaseActive.collectAsStateWithLifecycle()
     val isGeminiActive by viewModel.isGeminiActive.collectAsStateWithLifecycle()
+    val gapReport by viewModel.skillGapReport.collectAsStateWithLifecycle()
+    val dailyCoach by viewModel.dailyRecommendation.collectAsStateWithLifecycle()
 
     val completedTasks = tasks.count { it.isCompleted }
     val totalTasks = tasks.size
@@ -2296,59 +2334,217 @@ fun HomeLayout(viewModel: SkillStackerViewModel) {
             }
         }
 
-        // 3. Progress Card
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = SkillSurface),
-                shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                modifier = Modifier.fillMaxWidth().testTag("home_progress_card")
-            ) {
-                Column(modifier = Modifier.padding(18.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Roadmap Completion Progress",
-                            fontSize = 14.sp,
-                            color = SkillText,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "$progressPercent%",
-                            fontSize = 16.sp,
+        // 3. Progress Card (hides if no tasks)
+        if (totalTasks > 0) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SkillSurface),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                    modifier = Modifier.fillMaxWidth().testTag("home_progress_card")
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Roadmap Completion Progress",
+                                fontSize = 14.sp,
+                                color = SkillText,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "$progressPercent%",
+                                fontSize = 16.sp,
+                                color = SkillPrimary,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        LinearProgressIndicator(
+                            progress = completedTasks.toFloat() / totalTasks,
                             color = SkillPrimary,
-                            fontWeight = FontWeight.ExtraBold
+                            trackColor = Color(0xFFE2E8F0),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(CircleShape)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "$completedTasks of $totalTasks tasks checked",
+                                fontSize = 12.sp,
+                                color = SkillMutedText
+                            )
+                            Text(
+                                text = "Let's review",
+                                fontSize = 11.sp,
+                                color = SkillPrimary,
+                                modifier = Modifier.clickable { viewModel.switchTab(DashboardTab.ROADMAP) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3.A Career Readiness Score Card (Hides if no data)
+        if (gapReport != null && gapReport!!.readinessScore > 0) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SkillSurface),
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("home_readiness_score_card")
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Analytics,
+                                contentDescription = "Readiness Analytics",
+                                tint = SkillPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Career Market Readiness",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = SkillText
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .background(SkillPrimary.copy(alpha = 0.1f), shape = CircleShape)
+                                    .border(BorderStroke(2.dp, SkillPrimary), shape = CircleShape)
+                            ) {
+                                Text(
+                                    text = "${gapReport!!.readinessScore}%",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = SkillPrimary
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text(
+                                    text = if (gapReport!!.readinessScore >= 70) "Highly Market Ready" else "Ready to Grow",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SkillText
+                                )
+                                Text(
+                                    text = gapReport!!.readinessSummary,
+                                    fontSize = 12.sp,
+                                    color = SkillMutedText,
+                                    lineHeight = 16.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3.B Recommended Project Card (Hides if no data)
+        if (gapReport != null && gapReport!!.recommendedProjects.isNotEmpty()) {
+            item {
+                val recommendedProject = gapReport!!.recommendedProjects.first()
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SkillSurface),
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("home_recommended_project_card")
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Build,
+                                contentDescription = "Recommended Project",
+                                tint = SkillSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Recommended Portfolio Project",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = SkillText
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = recommendedProject,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SkillSecondary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Based on your career goal, building this cloud-deployable or client-facing project will maximize your profile visibility.",
+                            fontSize = 12.sp,
+                            color = SkillMutedText,
+                            lineHeight = 16.sp
                         )
                     }
-                    Spacer(modifier = Modifier.height(10.dp))
-                    LinearProgressIndicator(
-                        progress = if (totalTasks > 0) completedTasks.toFloat() / totalTasks else 0.0f,
-                        color = SkillPrimary,
-                        trackColor = Color(0xFFE2E8F0),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(8.dp)
-                            .clip(CircleShape)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                }
+            }
+        }
+
+        // 3.C Recommended Resource (Hides if no data)
+        if (dailyCoach != null && dailyCoach!!.recommendedResource.isNotEmpty()) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SkillSurface),
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("home_recommended_resource_card")
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.MenuBook,
+                                contentDescription = "Recommended Resource",
+                                tint = SkillSuccess,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Recommended Study Resource",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = SkillText
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "$completedTasks of $totalTasks tasks checked",
-                            fontSize = 12.sp,
-                            color = SkillMutedText
+                            text = dailyCoach!!.recommendedResource,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SkillSuccess
                         )
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Let's review",
-                            fontSize = 11.sp,
-                            color = SkillPrimary,
-                            modifier = Modifier.clickable { viewModel.switchTab(DashboardTab.ROADMAP) }
+                            text = "Refer to the curated guides or study platforms for dynamic lessons on this exact topic.",
+                            fontSize = 12.sp,
+                            color = SkillMutedText,
+                            lineHeight = 16.sp
                         )
                     }
                 }
@@ -2465,48 +2661,50 @@ fun HomeLayout(viewModel: SkillStackerViewModel) {
             }
         }
 
-        // 4. Today's Focus Card
-        item {
-            val taskCardTitle = if (nextPendingTask != null) "Today's Focus Task" else "All Caught Up!"
-            val taskCardDesc = nextPendingTask?.title ?: "Outstanding job! You've cleared your roadmap tasks. Click 'Generate AI Roadmap' or Edit Profile to inject fresh challenges."
+        // 4. Today's Focus Card (hides if no tasks)
+        if (totalTasks > 0) {
+            item {
+                val taskCardTitle = if (nextPendingTask != null) "Today's Focus Task" else "All Caught Up!"
+                val taskCardDesc = nextPendingTask?.title ?: "Outstanding job! You've cleared your roadmap tasks. Click 'Generate AI Roadmap' or Edit Profile to inject fresh challenges."
 
-            Card(
-                colors = CardDefaults.cardColors(containerColor = SkillSurface),
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().testTag("home_focus_card")
-            ) {
-                Column(modifier = Modifier.padding(18.dp)) {
-                    Text(
-                        text = taskCardTitle,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SkillSecondary,
-                        letterSpacing = 1.sp
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = taskCardDesc,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = SkillText
-                    )
-
-                    if (nextPendingTask != null) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SkillSurface),
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("home_focus_card")
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
                         Text(
-                            text = nextPendingTask.description,
-                            fontSize = 13.sp,
-                            color = SkillMutedText,
-                            lineHeight = 18.sp,
-                            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                            text = taskCardTitle,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SkillSecondary,
+                            letterSpacing = 1.sp
                         )
-                        Button(
-                            onClick = { viewModel.toggleTaskComplete(nextPendingTask.id, true) },
-                            colors = ButtonDefaults.buttonColors(containerColor = SkillSecondary),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.height(40.dp)
-                        ) {
-                            Text("Mark As Completed", fontSize = 12.sp, color = Color.White)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = taskCardDesc,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SkillText
+                        )
+
+                        if (nextPendingTask != null) {
+                            Text(
+                                text = nextPendingTask.description,
+                                fontSize = 13.sp,
+                                color = SkillMutedText,
+                                lineHeight = 18.sp,
+                                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                            )
+                            Button(
+                                onClick = { viewModel.toggleTaskComplete(nextPendingTask.id, true) },
+                                colors = ButtonDefaults.buttonColors(containerColor = SkillSecondary),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.height(40.dp)
+                            ) {
+                                Text("Mark As Completed", fontSize = 12.sp, color = Color.White)
+                            }
                         }
                     }
                 }
@@ -3230,10 +3428,45 @@ fun SkillLibraryLayout(viewModel: SkillStackerViewModel) {
 @Composable
 fun ResourcesLayout(viewModel: SkillStackerViewModel) {
     val items = viewModel.curatedResources
-    val categories = listOf("Courses", "YouTube Channels", "Certifications", "Platforms")
-    var selectedCategory by remember { mutableStateOf("Courses") }
+    val careerPaths = listOf(
+        "Cybersecurity",
+        "Data Science",
+        "Full Stack Development",
+        "Cloud Computing",
+        "UI/UX Design",
+        "Video Editing",
+        "Graphic Design",
+        "AI/ML",
+        "Digital Marketing",
+        "Product Management",
+        "App Development"
+    )
+    var selectedPath by remember { mutableStateOf("Cybersecurity") }
+    val categories = listOf("Learning Resources", "Certifications", "Practice Platforms", "Projects")
+    var selectedCategory by remember { mutableStateOf("Learning Resources") }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
-    val filteredItems = items.filter { it.category == selectedCategory }
+    // Filter path items
+    val pathItems = items.filter { it.careerPath.equals(selectedPath, ignoreCase = true) }
+
+    // Filter category items
+    val filteredItems = pathItems.filter { item ->
+        when (selectedCategory) {
+            "Learning Resources" -> {
+                item.category == "YouTube Channels" || item.category == "Free Courses" || item.category == "Paid Courses"
+            }
+            "Certifications" -> {
+                item.category == "Certifications"
+            }
+            "Practice Platforms" -> {
+                item.category == "Practice Platforms"
+            }
+            "Projects" -> {
+                item.category == "Projects"
+            }
+            else -> false
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -3243,38 +3476,106 @@ fun ResourcesLayout(viewModel: SkillStackerViewModel) {
         Column(modifier = Modifier.padding(horizontal = 20.dp)) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Curated Resources",
+                text = "Explorer Paths",
                 fontSize = 28.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = SkillText,
                 modifier = Modifier.testTag("resources_header_title")
             )
             Text(
-                text = "Premium material to help complete roadmap phases.",
+                text = "Extensive academic and practice directory organized by technical track.",
                 fontSize = 14.sp,
                 color = SkillMutedText
             )
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Filter row
+            // Horizontal Scrollable of 11 Career Paths
+            Text(
+                text = "SELECT CAREER PATH",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = SkillSecondary,
+                letterSpacing = 1.sp,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth().testTag("resources_category_row")
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp)
+                    .testTag("resources_path_row")
             ) {
-                items(categories) { cat ->
-                    val isSelected = selectedCategory == cat
+                items(careerPaths) { path ->
+                    val isSelected = selectedPath == path
+                    val pathIcon = when (path) {
+                        "Cybersecurity" -> Icons.Default.Lock
+                        "Data Science" -> Icons.Default.Analytics
+                        "Full Stack Development" -> Icons.Default.Layers
+                        "Cloud Computing" -> Icons.Default.Cloud
+                        "UI/UX Design" -> Icons.Default.Widgets
+                        "Video Editing" -> Icons.Default.Movie
+                        "Graphic Design" -> Icons.Default.Palette
+                        "AI/ML" -> Icons.Default.AutoAwesome
+                        "Digital Marketing" -> Icons.Default.Timeline
+                        "Product Management" -> Icons.Default.Assignment
+                        "App Development" -> Icons.Default.Build
+                        else -> Icons.Default.Folder
+                    }
+
                     Surface(
-                        modifier = Modifier.clickable { selectedCategory = cat },
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (isSelected) SkillSecondary else SkillSurface,
-                        border = BorderStroke(1.dp, if (isSelected) SkillSecondary else Color(0xFFE2E8F0))
+                        modifier = Modifier.clickable { selectedPath = path },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) SkillPrimary else SkillSurface,
+                        border = BorderStroke(1.dp, if (isSelected) SkillPrimary else Color(0xFFE2E8F0))
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        ) {
+                            Icon(
+                                imageVector = pathIcon,
+                                contentDescription = "$path Icon",
+                                tint = if (isSelected) Color.White else SkillPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = path,
+                                color = if (isSelected) Color.White else SkillText,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Categories Selector Pills
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFF1F5F9), shape = RoundedCornerShape(12.dp))
+                    .padding(4.dp)
+                    .testTag("resources_category_row"),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                categories.forEach { cat ->
+                    val isSelected = selectedCategory == cat
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isSelected) Color.White else Color.Transparent)
+                            .clickable { selectedCategory = cat }
+                            .padding(vertical = 8.dp)
                     ) {
                         Text(
                             text = cat,
-                            color = if (isSelected) Color.White else SkillText,
-                            fontSize = 14.sp,
+                            color = if (isSelected) SkillText else SkillMutedText,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            maxLines = 1
                         )
                     }
                 }
@@ -3284,58 +3585,200 @@ fun ResourcesLayout(viewModel: SkillStackerViewModel) {
 
         // Resources list
         LazyColumn(
-            contentPadding = PaddingValues(horizontal = 20.dp),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.weight(1f).testTag("resources_list")
+            modifier = Modifier
+                .weight(1f)
+                .testTag("resources_list")
         ) {
-            items(filteredItems) { item ->
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = SkillSurface),
-                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth().testTag("resource_card_${item.name}")
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+            if (filteredItems.isEmpty()) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = SkillSurface),
+                        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "No Resources",
+                                tint = SkillSecondary,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                text = item.name,
+                                text = "Resources Coming Soon!",
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = SkillText
                             )
-
-                            Surface(
-                                color = if (item.cost == "Free") SkillSuccess.copy(alpha = 0.15f) else SkillPrimary.copy(alpha = 0.15f),
-                                shape = RoundedCornerShape(4.dp)
-                              ) {
+                            Text(
+                                text = "We are continuously expanding our academic and practice directory for $selectedPath.",
+                                fontSize = 13.sp,
+                                color = SkillMutedText,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(filteredItems) { item ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = SkillSurface),
+                        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("resource_card_${item.name.replace(" ", "_")}")
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    text = item.cost,
-                                    color = if (item.cost == "Free") SkillSuccess else SkillPrimary,
-                                    fontSize = 10.sp,
+                                    text = item.name,
+                                    fontSize = 16.sp,
                                     fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    color = SkillText,
+                                    modifier = Modifier.weight(1f)
                                 )
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                // Visual indication of FREE/PAID
+                                Surface(
+                                    color = if (item.cost.equals("Free", ignoreCase = true)) SkillSuccess.copy(alpha = 0.15f) else SkillPrimary.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = item.cost.uppercase(),
+                                        color = if (item.cost.equals("Free", ignoreCase = true)) SkillSuccess else SkillPrimary,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            ) {
+                                // Specific Category / SubCategory tag
+                                val catColor = when (item.category) {
+                                    "YouTube Channels" -> Color(0xFFFF0000)
+                                    "Free Courses", "Paid Courses" -> SkillPrimary
+                                    "Certifications" -> SkillSuccess
+                                    "Practice Platforms" -> SkillSecondary
+                                    else -> Color(0xFF64748B)
+                                }
+                                Surface(
+                                    color = catColor.copy(alpha = 0.1f),
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = when (item.category) {
+                                            "YouTube Channels" -> "YOUTUBE CHANNEL"
+                                            "Free Courses" -> "FREE COURSE"
+                                            "Paid Courses" -> "PAID COURSE"
+                                            "Certifications" -> "CERTIFICATION"
+                                            "Practice Platforms" -> "PRACTICE PLATFORM"
+                                            "Projects" -> "RECOMMENDED PROJECT"
+                                            else -> item.category.uppercase()
+                                        },
+                                        color = catColor,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+
+                                if (item.category == "Certifications" && item.difficulty != "N/A") {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    val diffColor = when (item.difficulty) {
+                                        "Beginner" -> SkillSuccess
+                                        "Intermediate" -> SkillPrimary
+                                        else -> SkillSecondary
+                                    }
+                                    Surface(
+                                        color = diffColor.copy(alpha = 0.12f),
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text(
+                                            text = item.difficulty.uppercase(),
+                                            color = diffColor,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Text(
+                                text = "Provider: ${item.provider}",
+                                fontSize = 12.sp,
+                                color = SkillMutedText,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                              )
+
+                            Text(
+                                text = item.description,
+                                fontSize = 13.sp,
+                                color = SkillText.copy(alpha = 0.8f),
+                                lineHeight = 18.sp,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+
+                            val actionText = when (item.category) {
+                                "Free Courses", "Paid Courses" -> "📚 Open Course"
+                                "YouTube Channels" -> "▶ Watch Now"
+                                "Certifications" -> "🏆 View Certification"
+                                "Practice Platforms" -> "💻 Try Platform"
+                                else -> "🔨 Start Project"
+                            }
+
+                            Button(
+                                onClick = {
+                                    try {
+                                        val trimmedUrl = item.url.trim()
+                                        if (trimmedUrl.isNotEmpty()) {
+                                            val parsedUri = android.net.Uri.parse(trimmedUrl)
+                                            if (parsedUri.scheme == "http" || parsedUri.scheme == "https") {
+                                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, parsedUri).apply {
+                                                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                                context.startActivity(intent)
+                                            } else {
+                                                android.widget.Toast.makeText(context, "Resource link unavailable", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        } else {
+                                            android.widget.Toast.makeText(context, "Resource link unavailable", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "Resource link unavailable", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = SkillPrimary),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 10.dp)
+                                    .height(40.dp)
+                                    .testTag("resource_button_${item.name.replace(" ", "_")}")
+                            ) {
+                                Text(text = actionText, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
                             }
                         }
-
-                        Text(
-                            text = "Provider: ${item.provider}",
-                            fontSize = 12.sp,
-                            color = SkillSecondary,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
-
-                        Text(
-                            text = item.description,
-                            fontSize = 13.sp,
-                            color = SkillMutedText,
-                            lineHeight = 18.sp
-                        )
                     }
                 }
             }
@@ -3899,6 +4342,370 @@ fun ProfileLayout(viewModel: SkillStackerViewModel) {
                 }
             }
             Spacer(modifier = Modifier.height(32.dp))
+        }
+    }
+}
+
+// ------------------------------------------------------------------------
+// AI CAREER COACH MENTOR CHAT PANEL VISUAL IMPLEMENTATION
+// ------------------------------------------------------------------------
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AiMentorChatPanel(viewModel: SkillStackerViewModel) {
+    val chatHistory by viewModel.chatHistory.collectAsStateWithLifecycle()
+    val isChatLoading by viewModel.isChatLoading.collectAsStateWithLifecycle()
+    val chatInput by viewModel.chatInput.collectAsStateWithLifecycle()
+    val lazyListState = rememberLazyListState()
+
+    // Automatic scroll matching
+    LaunchedEffect(chatHistory.size) {
+        if (chatHistory.isNotEmpty()) {
+            lazyListState.animateScrollToItem(chatHistory.size - 1)
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { viewModel.toggleChat(false) }
+            .zIndex(20f),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = SkillBg),
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            border = BorderStroke(1.dp, SkillBorder),
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.85f)
+                .clickable(enabled = true, onClick = {}) // Block closing from panel tap
+                .testTag("ai_mentor_panel")
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Coach header section
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(SkillPrimary, SkillSecondary)
+                            )
+                        )
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            color = Color.White.copy(alpha = 0.2f),
+                            shape = CircleShape,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "Sparkle",
+                                tint = Color.White,
+                                modifier = Modifier
+                                    .padding(8.dp)
+                                    .size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "Career AI Coach",
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .background(Color(0xFF4ADE80), shape = CircleShape)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Ready to Guide",
+                                    color = Color.White.copy(alpha = 0.82f),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+
+                    Row {
+                        IconButton(
+                            onClick = { viewModel.clearChat() },
+                            modifier = Modifier.testTag("clear_chat_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Clear Chat",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(
+                            onClick = { viewModel.toggleChat(false) },
+                            modifier = Modifier.testTag("close_chat_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close Chat",
+                                tint = Color.White
+                            )
+                        }
+                    }
+                }
+
+                // Scrollable chat dialogue area
+                LazyColumn(
+                    state = lazyListState,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .testTag("chat_messages_list")
+                ) {
+                    items(chatHistory) { message ->
+                        val isUser = message.sender == "user"
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+                        ) {
+                            if (!isUser) {
+                                Surface(
+                                    color = SkillSecondary.copy(alpha = 0.12f),
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = "Bot",
+                                        tint = SkillSecondary,
+                                        modifier = Modifier.padding(8.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+
+                            Card(
+                                shape = if (isUser) {
+                                    RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
+                                } else {
+                                    RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
+                                },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isUser) SkillPrimary else SkillSurface
+                                ),
+                                border = if (isUser) null else BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                                modifier = Modifier
+                                    .widthIn(max = 280.dp)
+                                    .testTag(if (isUser) "user_message" else "bot_message")
+                            ) {
+                                Text(
+                                    text = message.text,
+                                    color = if (isUser) Color.White else SkillText,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp,
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+
+                            if (isUser) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Surface(
+                                    color = SkillPrimary.copy(alpha = 0.12f),
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Person,
+                                        contentDescription = "User",
+                                        tint = SkillPrimary,
+                                        modifier = Modifier.padding(8.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (isChatLoading) {
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Start,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    color = SkillSecondary.copy(alpha = 0.12f),
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = "Bot loading",
+                                        tint = SkillSecondary,
+                                        modifier = Modifier.padding(8.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Card(
+                                    shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+                                    colors = CardDefaults.cardColors(containerColor = SkillSurface),
+                                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                                    modifier = Modifier.widthIn(max = 280.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        CircularProgressIndicator(
+                                            color = SkillSecondary,
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Coach is formulating strategy...",
+                                            fontSize = 11.sp,
+                                            color = SkillMutedText,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Row of high-impact Mentor Quick Actions
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp, bottom = 4.dp)
+                ) {
+                    Text(
+                        text = "QUICK ACTIONS",
+                        color = SkillMutedText,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+                    )
+                    
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("quick_actions_row")
+                    ) {
+                        val actions = listOf(
+                            Triple("Recommend Skills", Icons.Default.Widgets, "Can you analyze my profile information and progress, then suggest the next 3 key technical skills I should target?"),
+                            Triple("Find Resources", Icons.Default.MenuBook, "Based on my career goal and missing skills, what curated books, platform setups, or tutorials do you recommend?"),
+                            Triple("Suggest Projects", Icons.Default.Build, "Recommend 2-3 specific, high-quality projects for my resume that align with my skill level and target field."),
+                            Triple("Career Match", Icons.Default.Analytics, "Analyze my profile, current levels, and academic track to show which direct tech roles are my best matches."),
+                            Triple("Certification Advice", Icons.Default.CardMembership, "What industry certs (like AWS, CompTIA, PortSwigger) should I aim for next to stand out to employers?"),
+                            Triple("Interview Prep", Icons.Default.Timeline, "Conduct brief mock interview preparation! Provide 2 core behavior and technical questions for my goal, plus some advice.")
+                        )
+
+                        items(actions) { (title, icon, prompt) ->
+                            Surface(
+                                modifier = Modifier.clickable { viewModel.triggerQuickAction(prompt) },
+                                shape = RoundedCornerShape(12.dp),
+                                color = SkillSurface,
+                                border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = title,
+                                        tint = SkillPrimary,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = title,
+                                        color = SkillText,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Standard input row with Send action
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Divider(color = Color(0xFFE2E8F0), thickness = 1.dp)
+                    Surface(
+                        color = SkillSurface,
+                        tonalElevation = 4.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .navigationBarsPadding()
+                                .imePadding()
+                                .padding(14.dp)
+                                .fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = chatInput,
+                                onValueChange = { viewModel.setChatInput(it) },
+                                placeholder = { Text("Ask your mentor about skills, certs...", fontSize = 13.sp) },
+                                shape = RoundedCornerShape(24.dp),
+                                maxLines = 3,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = SkillSecondary,
+                                    unfocusedBorderColor = Color(0xFFE2E8F0),
+                                    focusedLabelColor = SkillSecondary
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(max = 100.dp)
+                                    .testTag("chat_input_field")
+                            )
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            FloatingActionButton(
+                                onClick = { 
+                                    if (chatInput.isNotBlank() && !isChatLoading) {
+                                        viewModel.sendChatMessage()
+                                    }
+                                },
+                                containerColor = if (chatInput.isNotBlank()) SkillSecondary else SkillSecondary.copy(alpha = 0.5f),
+                                contentColor = Color.White,
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("send_chat_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Send,
+                                    contentDescription = "Send",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

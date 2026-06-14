@@ -1,76 +1,21 @@
-# SkillStacker 🚀
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
+</div>
 
-Build the Skills That Matter.
+# Run and deploy your AI Studio app
 
-## Problem
-
-Students often struggle with:
-
-- Information overload
-- Lack of structured learning paths
-- Unclear career direction
-- Difficulty identifying skill gaps
-- Finding reliable learning resources
-
-## Solution
-
-SkillStacker is an AI-powered career growth platform that helps students identify skill gaps, generate personalized learning roadmaps, discover curated resources, and become job-ready.
-
-## Features
-
-- Google Authentication
-- AI Roadmap Generator
-- Skill Gap Analysis
-- AI Daily Coach
-- Smart Resource Recommendations
-- Progress Tracking
-- Career Readiness Score
-
-## Tech Stack
-
-### Frontend
-- Kotlin
-- Jetpack Compose
-- Material 3
-
-### Backend
-- Supabase
-
-### Authentication
-- Google OAuth
-- Supabase Auth
-
-### AI
-- Google Gemini 3.5 Flash
-
-### Database
-- PostgreSQL (Supabase)
-
-## Architecture
-
-User
-↓
-SkillStacker App
-↓
-Google Authentication
-↓
-Supabase
-↓
-Gemini AI
-↓
-Roadmaps & Skill Analysis
-
-## Screenshots
-
-(Add screenshots here)
-
-## Demo Video
-
-(Add YouTube or Drive link here)
-
-## APK Download
-
-(Add GitHub Release APK link here)
-
+This contains everything you need to run your app locally.
 
 View your app in AI Studio: https://ai.studio/apps/2fa25be1-65d5-42cf-8de2-a2f64f460e0a
+
+## Run Locally
+
+**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
+
+
+1. Open Android Studio
+2. Select **Open** and choose the directory containing this project
+3. Allow Android Studio to fix any incompatibilities as it imports the project.
+4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
+5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
+6. Run the app on an emulator or physical device

@@ -28,6 +28,9 @@ interface AppDao {
     @Query("UPDATE roadmap_tasks SET isCompleted = :completed WHERE id = :id")
     suspend fun updateTaskStatus(id: Int, completed: Boolean)
 
+    @Query("SELECT * FROM roadmap_tasks WHERE id = :id LIMIT 1")
+    suspend fun getTaskById(id: Int): RoadmapTaskEntity?
+
     @Query("DELETE FROM roadmap_tasks")
     suspend fun clearRoadmapTasks()
 }

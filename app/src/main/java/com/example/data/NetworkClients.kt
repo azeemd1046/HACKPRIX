@@ -15,8 +15,9 @@ import java.io.IOException
 object NetworkClients {
     private const val TAG = "NetworkClients"
     private val client = OkHttpClient.Builder()
-        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 
     private val JSON_MEDIA_TYPE = "application/json".toMediaType()
@@ -342,7 +343,9 @@ object NetworkClients {
     // ------------------------------------------------------------------------
 
     suspend fun generateGeminiResponse(prompt: String): String? = withContext(Dispatchers.IO) {
-        if (!hasGeminiConfig()) return@withContext null
+        if (!hasGeminiConfig()) {
+            throw Exception("Gemini key not configured. Please add GEMINI_API_KEY.")
+        }
         try {
             val apiKey = BuildConfig.GEMINI_API_KEY
             // Conforming to 'gemini-3.5-flash' as recommended by gemini-api/SKILL.md
@@ -358,6 +361,9 @@ object NetworkClients {
                         ))
                     }
                 ))
+                put("generationConfig", JSONObject().apply {
+                    put("responseMimeType", "application/json")
+                })
             }.toString()
 
             val request = Request.Builder()
@@ -370,7 +376,7 @@ object NetworkClients {
                 if (!response.isSuccessful) {
                     val errorStr = response.body?.string() ?: ""
                     Log.e(TAG, "Gemini API failed: $errorStr")
-                    return@withContext null
+                    throw Exception("Unable to generate roadmap. Please try again.")
                 }
                 val bodyStr = response.body?.string() ?: return@withContext null
                 val responseJson = JSONObject(bodyStr)
@@ -379,9 +385,88 @@ object NetworkClients {
                 val parts = contentObj.getJSONArray("parts")
                 return@withContext parts.getJSONObject(0).getString("text")
             }
+        } catch (e: java.net.UnknownHostException) {
+            Log.e(TAG, "Gemini call network exception", e)
+            throw Exception("Check your internet connection.")
+        } catch (e: java.io.IOException) {
+            Log.e(TAG, "Gemini call network exception", e)
+            throw Exception("Check your internet connection.")
         } catch (e: Exception) {
             Log.e(TAG, "Gemini call exception", e)
-            return@withContext null
+            if (e.message != null && (e.message!!.contains("Gemini key not configured") || e.message!!.contains("internet"))) {
+                throw e
+            }
+            throw Exception("Unable to generate roadmap. Please try again.")
+        }
+    }
+
+    suspend fun generateGeminiChat(
+        systemInstruction: String,
+        history: List<Pair<String, String>>,
+        userInput: String
+    ): String? = withContext(Dispatchers.IO) {
+        if (!hasGeminiConfig()) {
+            throw Exception("Gemini key not configured. Please add GEMINI_API_KEY.")
+        }
+        try {
+            val apiKey = BuildConfig.GEMINI_API_KEY
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
+
+            val jsonRequest = JSONObject().apply {
+                val contentsArray = JSONArray()
+                for (turn in history) {
+                    contentsArray.put(JSONObject().apply {
+                        put("role", turn.first) // "user" or "model" (model works for assistant)
+                        put("parts", JSONArray().put(JSONObject().apply {
+                            put("text", turn.second)
+                        }))
+                    })
+                }
+                contentsArray.put(JSONObject().apply {
+                    put("role", "user")
+                    put("parts", JSONArray().put(JSONObject().apply {
+                        put("text", userInput)
+                    }))
+                })
+                put("contents", contentsArray)
+
+                if (systemInstruction.isNotEmpty()) {
+                    put("systemInstruction", JSONObject().apply {
+                        put("parts", JSONArray().put(JSONObject().apply {
+                            put("text", systemInstruction)
+                        }))
+                    })
+                }
+            }.toString()
+
+            val request = Request.Builder()
+                .url(url)
+                .post(jsonRequest.toRequestBody(JSON_MEDIA_TYPE))
+                .addHeader("Content-Type", "application/json")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val errorStr = response.body?.string() ?: ""
+                    Log.e(TAG, "Gemini Chat API failed: $errorStr")
+                    throw Exception("Unable to get coach response. Please try again.")
+                }
+                val bodyStr = response.body?.string() ?: return@withContext null
+                val responseJson = JSONObject(bodyStr)
+                val candidates = responseJson.getJSONArray("candidates")
+                val contentObj = candidates.getJSONObject(0).getJSONObject("content")
+                val parts = contentObj.getJSONArray("parts")
+                return@withContext parts.getJSONObject(0).getString("text")
+            }
+        } catch (e: java.net.UnknownHostException) {
+            Log.e(TAG, "Gemini Chat network exception", e)
+            throw Exception("Check your internet connection.")
+        } catch (e: java.io.IOException) {
+            Log.e(TAG, "Gemini Chat network exception", e)
+            throw Exception("Check your internet connection.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Gemini Chat general exception", e)
+            throw e
         }
     }
 }

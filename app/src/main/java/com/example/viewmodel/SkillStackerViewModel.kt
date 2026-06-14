@@ -387,8 +387,10 @@ class SkillStackerViewModel(application: Application) : AndroidViewModel(applica
     // ---- MAIN APP ACTIONS ----
 
     fun toggleTaskComplete(taskId: Int, completed: Boolean) {
+        val email = _currentUserEmail.value ?: "offline_user@gmail.com"
+        val token = prefs.getString("auth_token", null)
         viewModelScope.launch {
-            repository.updateTaskStatus(taskId, completed)
+            repository.updateTaskStatus(taskId, completed, email, token)
         }
     }
 
@@ -589,4 +591,161 @@ class SkillStackerViewModel(application: Application) : AndroidViewModel(applica
 
     fun getCachedRoadmapJson(): String? = repository.getCachedRoadmapJson()
     fun getCachedSkillGapReport(): SkillGapReport? = repository.getCachedSkillGapReport()
+
+    // ------------------------------------------------------------------------
+    // AI CAREER MENTOR CHATBOT SERVICES
+    // ------------------------------------------------------------------------
+    val isChatOpen = MutableStateFlow(false)
+    val chatInput = MutableStateFlow("")
+
+    private val _chatHistory = MutableStateFlow<List<ChatMessage>>(listOf(
+        ChatMessage("bot", "Hello! I am your AI Career Mentor. I'm here to support your professional transition, roadmap development, skill analysis, certifications advice, and interview preparation. What shall we focus on today?")
+    ))
+    val chatHistory: StateFlow<List<ChatMessage>> = _chatHistory.asStateFlow()
+
+    private val _isChatLoading = MutableStateFlow(false)
+    val isChatLoading: StateFlow<Boolean> = _isChatLoading.asStateFlow()
+
+    fun toggleChat(open: Boolean) {
+        isChatOpen.value = open
+    }
+
+    fun setChatInput(text: String) {
+        chatInput.value = text
+    }
+
+    fun triggerQuickAction(actionPrompt: String) {
+        sendChatMessage(actionPrompt)
+    }
+
+    fun clearChat() {
+        _chatHistory.value = listOf(
+            ChatMessage("bot", "Hello! I am your AI Career Mentor. I'm here to support your professional transition, roadmap development, skill analysis, certifications advice, and interview preparation. What shall we focus on today?")
+        )
+    }
+
+    fun sendChatMessage(text: String = chatInput.value) {
+        val messageText = text.trim()
+        if (messageText.isEmpty()) return
+
+        if (messageText == chatInput.value.trim()) {
+            chatInput.value = ""
+        }
+
+        val userMsg = ChatMessage("user", messageText)
+        _chatHistory.value = _chatHistory.value + userMsg
+
+        viewModelScope.launch {
+            _isChatLoading.value = true
+            try {
+                val profile = _latestProfile.value
+                val careerGoal = profile?.careerGoal ?: onboardCareerGoal.value.ifEmpty { "Software Developer" }
+                val interests = profile?.interests ?: onboardInterests.value.joinToString(", ").ifEmpty { "Computer Science" }
+                val currentLevel = profile?.currentLevel ?: onboardCurrentLevel.value.ifEmpty { "Beginner" }
+                val branch = profile?.branch ?: onboardBranch.value.ifEmpty { "CSE" }
+                val year = profile?.year ?: onboardYear.value.ifEmpty { "1st" }
+
+                val gapReport = _skillGapReport.value
+                val readinessScore = gapReport?.readinessScore ?: 0
+                val missingSkills = gapReport?.missingSkills?.joinToString(", ") ?: "No analysis report run yet"
+                val recommendations = gapReport?.recommendations?.joinToString(". ") ?: "No general recommendations generated"
+
+                val tasks = _roadmapTasks.value
+                val totalCount = tasks.size
+                val completedCount = tasks.count { it.isCompleted }
+                val percent = if (totalCount > 0) (completedCount * 100) / totalCount else 0
+
+                val taskSummaries = if (tasks.isEmpty()) {
+                    "No roadmap milestones established yet. Guide the user to run Gap Analysis to generate milestones."
+                } else {
+                    tasks.take(15).joinToString("\n") { task ->
+                        "- Phase ${task.phase} [${task.phaseTitle}]: ${task.title} (Status: ${if (task.isCompleted) "Completed" else "Incomplete"})"
+                    }
+                }
+
+                val sysInstruction = """
+                    You are the "SkillStacker AI Career Mentor", an expert career coach and technical guidance specialist dedicated to helping the user achieve their career goals.
+                    
+                    SPECIALIZED SCOPE:
+                    Your sole purpose is to serve as a Career Mentor. You are NOT a general-purpose assistant.
+                    
+                    ALLOWED TOPICS:
+                    - Career Guidance
+                    - Skill Development
+                    - Learning Roadmaps (phases, tasks, and pacing)
+                    - Certifications (suitability, exam preparation, paths)
+                    - Practical Projects (project ideas, implementation suggestions)
+                    - Interview Preparation (mock questions, behavioral and technical tips)
+                    - Career Selection (choosing tracks, comparing roles)
+                    - Resource Recommendations (courses, books, tutorials)
+                    
+                    FORBIDDEN TOPICS:
+                    - Politics, Government, Elections
+                    - Entertainment, Movies, Celebrities, Music
+                    - Jokes, Humor, Off-topic creative writing
+                    - Current News, Trends unrelated to technology careers
+                    - Chatting about unrelated tasks, general coding outside educational career contexts, health, or food.
+                    - Random unrelated questions.
+                    
+                    CONSTRAINT COMPLIANCE RULES:
+                    If the user asks about ANY forbidden topic or something unrelated to professional career development, skill learning, or tech education:
+                    You MUST respond EXACTLY with this sentence:
+                    "I am SkillStacker's Career Mentor and can only assist with career growth, learning paths, skills, certifications, projects, and job readiness."
+                    Do NOT provide ANY other text, comments, markdown, or preambles if this condition is triggered!
+                    
+                    USER PROFILE & PROGRESS CONTEXT:
+                    Personalize your responses using the user's active profile and milestones progress listed below:
+                    User Name: ${profile?.fullName ?: "Skill Scholar"}
+                    User Career Goal: $careerGoal
+                    User Interests: $interests
+                    Current Level: $currentLevel
+                    Academic Branch/Year: $branch / $year
+                    
+                    SKILL GAP ANALYTICS:
+                    Overall readiness percentage: $readinessScore%
+                    Missing Skills Identified: $missingSkills
+                    Gap Recommendations: $recommendations
+                    
+                    ROADMAP MILESTONES:
+                    Completion Rate: $completedCount/$totalCount completed tasks ($percent%)
+                    Active Tasks:
+                    $taskSummaries
+                    
+                    Be professional, encouraging, analytical, and extremely concise. Provide bullet points and actionable, structured lists!
+                """.trimIndent()
+
+                val apiHistory = _chatHistory.value.dropLast(1).mapNotNull { msg ->
+                    val role = when (msg.sender) {
+                        "user" -> "user"
+                        "bot" -> "model"
+                        else -> null
+                    }
+                    if (role != null) Pair(role, msg.text) else null
+                }
+
+                val response = NetworkClients.generateGeminiChat(
+                    systemInstruction = sysInstruction,
+                    history = apiHistory,
+                    userInput = messageText
+                )
+
+                if (response != null) {
+                    _chatHistory.value = _chatHistory.value + ChatMessage("bot", response)
+                } else {
+                    _chatHistory.value = _chatHistory.value + ChatMessage("bot", "I was unable to secure a connection. Please verify your internet connection and try again.")
+                }
+            } catch (e: Exception) {
+                val errorMsg = e.message ?: "Please try again."
+                _chatHistory.value = _chatHistory.value + ChatMessage("bot", "Coach consult error: $errorMsg")
+            } finally {
+                _isChatLoading.value = false
+            }
+        }
+    }
 }
+
+data class ChatMessage(
+    val sender: String, // "user" or "bot"
+    val text: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
