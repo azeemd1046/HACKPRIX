@@ -1,21 +1,108 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+  # SkillStacker 🚀
 
-# Run and deploy your AI Studio app
+> Build the Skills That Matter.
 
-This contains everything you need to run your app locally.
+SkillStacker is an AI-powered career growth platform that helps students discover the right skills, identify skill gaps, generate personalized learning roadmaps, and access curated resources tailored to their career goals.
 
-View your app in AI Studio: https://ai.studio/apps/2fa25be1-65d5-42cf-8de2-a2f64f460e0a
+---
 
-## Run Locally
+## 🎥 Demo Video
 
-**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
+[Watch Demo Video Here](https://drive.google.com/file/u/0/d/1MSPwesV2in_dCQ8V4HiWNVPWEfZURZQX/view?usp=sharing&pli=1))
 
+---
 
-1. Open Android Studio
-2. Select **Open** and choose the directory containing this project
-3. Allow Android Studio to fix any incompatibilities as it imports the project.
-4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
-5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
-6. Run the app on an emulator or physical device
+## 📱 APK 
+
+[Use Latest APK]( https://aistudio.google.com/u/2/apps/2fa25be1-65d5-42cf-8de2-a2f64f460e0a?showAssistant=true&showPreview=true&fullscreenApplet=true)
+
+---
+
+## 🌟 Problem Statement
+
+Students often face information overload when trying to learn new skills and build a career. With thousands of courses, certifications, and learning resources available online, many students struggle to:
+
+- Choose the right career path
+- Understand which skills are required
+- Find trustworthy learning resources
+- Track their progress effectively
+- Determine how close they are to becoming job-ready
+
+---
+
+## 💡 Our Solution
+
+SkillStacker acts as an AI-powered career mentor that provides personalized guidance for students based on their goals, interests, and skill levels.
+
+Using Google Gemini AI, SkillStacker:
+
+- Generates personalized career roadmaps
+- Performs skill gap analysis
+- Recommends courses and certifications
+- Suggests relevant projects
+- Tracks learning progress
+- Helps students become industry-ready
+
+---
+
+## ✨ Features
+
+### 🎯 Personalized Career Roadmaps
+Generate customized learning paths based on career goals and interests.
+
+### 🧠 AI-Powered Skill Gap Analysis
+Identify missing skills and receive actionable recommendations.
+
+### 📚 Smart Resource Engine
+Get curated learning resources, courses, certifications, and projects.
+
+### 🤖 AI Career Guidance
+Receive personalized recommendations powered by Google Gemini.
+
+### 📈 Progress Tracking
+Monitor milestones and learning progress.
+
+### 🔐 Secure Authentication
+Google Sign-In powered by Supabase Authentication.
+
+---
+
+## 🛠️ Tech Stack
+
+### Frontend
+- Kotlin
+- Jetpack Compose
+- Material 3
+
+### Backend & Database
+- Supabase
+- PostgreSQL
+
+### Authentication
+- Google OAuth
+- Supabase Auth
+
+### AI
+- Google Gemini 2.5 Flash
+
+### Development Tools
+- Android Studio
+- Google AI Studio
+- GitHub
+
+---
+
+## 🏗️ System Architecture
+
+```text
+User
+ ↓
+Android App (Kotlin + Jetpack Compose)
+ ↓
+Google Authentication
+ ↓
+Supabase Backend
+ ↓
+Google Gemini AI
+ ↓
+Roadmaps • Resources • Skill Analysis
