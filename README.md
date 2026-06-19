@@ -106,3 +106,5 @@ Supabase Backend
 Google Gemini AI
  ↓
 Roadmaps • Resources • Skill Analysis
+
+USE SKILLSTACKS NOW
